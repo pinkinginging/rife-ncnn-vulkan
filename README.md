@@ -7,6 +7,21 @@ ncnn implementation of RIFE, Real-Time Intermediate Flow Estimation for Video Fr
 
 rife-ncnn-vulkan uses [ncnn project](https://github.com/Tencent/ncnn) as the universal neural network inference framework.
 
+## About this fork
+
+This fork keeps nihui's rife-ncnn-vulkan up to date with newer RIFE models. Changes on top of nihui's last release (20221029):
+
+- Supports RIFE v4.7 – v4.26 model folders, with the per-model padding newer models need (ported from [TNTwise/rife-ncnn-vulkan](https://github.com/TNTwise/rife-ncnn-vulkan))
+- Ships `rife-v4.22`, `rife-v4.22-lite`, `rife-v4.25`, `rife-v4.25-lite` and `rife-v4.26` in `models/`. Other converted models can be copied from TNTwise's repo into `models/`; the folder name must start with `rife-v4`
+- New options: `-q` webp output quality (0-100), `-l` list GPUs
+- CI builds Windows / Linux / macOS on every push; pushing a `v*` tag (or running the workflow manually) publishes a GitHub Release
+
+Recommended for cartoon / sticker frames: `-m rife-v4.26`
+
+```shell
+./rife-ncnn-vulkan -0 0.png -1 1.png -o mid.png -m rife-v4.26
+```
+
 ## [Download](https://github.com/nihui/rife-ncnn-vulkan/releases)
 
 Download Windows/Linux/MacOS Executable for Intel/AMD/Nvidia GPU

@@ -16,7 +16,12 @@ option(USE_STATIC_MOLTENVK "link moltenvk static library" OFF)
 
 find_package(Threads)
 find_package(OpenMP)
-find_package(Vulkan REQUIRED)
+# ncnn's SimpleVK bundles the Vulkan headers and loads the Vulkan loader at
+# runtime, so no Vulkan SDK is needed to build. Only the macOS static
+# MoltenVK build still links a Vulkan library explicitly.
+if(USE_STATIC_MOLTENVK)
+    find_package(Vulkan REQUIRED)
+endif()
 
 macro(rife_add_shader SHADER_SRC)
     get_filename_component(SHADER_SRC_NAME_WE ${SHADER_SRC} NAME_WE)
@@ -106,7 +111,8 @@ if(NOT USE_SYSTEM_NCNN)
     option(NCNN_DISABLE_RTTI "" ON)
     option(NCNN_DISABLE_EXCEPTION "" ON)
     option(NCNN_INT8 "" OFF)
-
+    option(NCNN_SIMPLEVK "" ON)
+    
     option(WITH_LAYER_absval "" OFF)
     option(WITH_LAYER_argmax "" OFF)
     option(WITH_LAYER_batchnorm "" OFF)
@@ -126,7 +132,7 @@ if(NOT USE_SYSTEM_NCNN)
     option(WITH_LAYER_input "" ON)
     option(WITH_LAYER_log "" OFF)
     option(WITH_LAYER_lrn "" OFF)
-    option(WITH_LAYER_memorydata "" OFF)
+    option(WITH_LAYER_memorydata "" ON)
     option(WITH_LAYER_mvn "" OFF)
     option(WITH_LAYER_pooling "" ON)
     option(WITH_LAYER_power "" OFF)
@@ -144,15 +150,15 @@ if(NOT USE_SYSTEM_NCNN)
     option(WITH_LAYER_spp "" OFF)
     option(WITH_LAYER_tanh "" OFF)
     option(WITH_LAYER_threshold "" OFF)
-    option(WITH_LAYER_tile "" OFF)
+    option(WITH_LAYER_tile "" ON)
     option(WITH_LAYER_rnn "" OFF)
     option(WITH_LAYER_lstm "" OFF)
     option(WITH_LAYER_binaryop "" ON)
     option(WITH_LAYER_unaryop "" ON)
-    option(WITH_LAYER_convolutiondepthwise "" OFF)
+    option(WITH_LAYER_convolutiondepthwise "" ON)
     option(WITH_LAYER_padding "" ON)
     option(WITH_LAYER_squeeze "" OFF)
-    option(WITH_LAYER_expanddims "" OFF)
+    option(WITH_LAYER_expanddims "" ON)
     option(WITH_LAYER_normalize "" OFF)
     option(WITH_LAYER_permute "" OFF)
     option(WITH_LAYER_priorbox "" OFF)
@@ -183,7 +189,14 @@ if(NOT USE_SYSTEM_NCNN)
     option(WITH_LAYER_swish "" OFF)
     option(WITH_LAYER_gemm "" OFF)
     option(WITH_LAYER_groupnorm "" OFF)
-    option(WITH_LAYER_layernorm "" OFF)
+    # NOTE: Recent ncnn builds compile the RMSNorm Vulkan layer by default and
+    # it reuses LayerNorm reduction shaders. If LayerNorm is disabled,
+    # `LayerShaderType::layernorm_*` entries will not be generated and the
+    # build fails in `rmsnorm_vulkan.cpp`.
+    #
+    # Use CACHE FORCE so existing build directories pick up the fix without
+    # requiring users to delete `build/`.
+    set(WITH_LAYER_layernorm ON CACHE BOOL "build with layer layernorm" FORCE)
     option(WITH_LAYER_softplus "" OFF)
     option(WITH_LAYER_gru "" OFF)
     option(WITH_LAYER_multiheadattention "" OFF)
@@ -254,7 +267,6 @@ rife_add_shader(rife_v4_timestep.comp)
 rife_add_shader(rife_v4_timestep_tta.comp)
 rife_add_shader(warp.comp)
 rife_add_shader(warp_pack4.comp)
-rife_add_shader(warp_pack8.comp)
 
 add_custom_target(generate-spirv DEPENDS ${SHADER_SPV_HEX_FILES})
 
@@ -266,7 +278,12 @@ add_executable(rife-ncnn-vulkan
 
 add_dependencies(rife-ncnn-vulkan generate-spirv)
 
-set(RIFE_LINK_LIBRARIES ncnn webp ${Vulkan_LIBRARY})
+# Some distros expose the loader as /usr/lib/x86_64-linux-gnu/libvulkan.so
+# without a /lib/libvulkan.so symlink. When FindVulkan caches a non-existent
+# path, make will fail with "No rule to make target '/lib/libvulkan.so'".
+# Find the loader library ourselves (fresh variable) to ensure it exists.
+# With NCNN_SIMPLEVK the loader is opened at runtime; nothing to link.
+set(RIFE_LINK_LIBRARIES ncnn webp)
 
 if(USE_STATIC_MOLTENVK)
     find_library(CoreFoundation NAMES CoreFoundation)
@@ -279,6 +296,7 @@ if(USE_STATIC_MOLTENVK)
     find_library(IOSurface NAMES IOSurface)
 
     list(APPEND RIFE_LINK_LIBRARIES
+        ${Vulkan_LIBRARY}
         ${Metal}
         ${QuartzCore}
         ${CoreGraphics}

@@ -1,14 +1,19 @@
 name: release
+
+# Build on every push / PR; publish a GitHub Release only for version tags
+# (git tag v20261028 && git push --tags) or a manual run.
 on:
   push:
-    tags:
-      - '*'
-
-env:
-  DEVELOPER_DIR: /Applications/Xcode_12.4.app/Contents/Developer
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    
+env: 
+  DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
   APPLICATION_NAME: rife-ncnn-vulkan
 
-jobs:
+jobs: 
 
   setup:
     runs-on: ubuntu-latest
@@ -18,65 +23,97 @@ jobs:
     steps:
     - name: get-appname
       id: get_appname
-      run: echo ::set-output name=APPNAME::${APPLICATION_NAME}
+      run: echo "APPNAME=${APPLICATION_NAME}" >> "$GITHUB_OUTPUT"
     - name: get-version
       id: get_version
-      run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
+      run: echo "VERSION=${GITHUB_REF_NAME//\//-}" >> "$GITHUB_OUTPUT"
 
   ubuntu:
     needs: [setup]
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-22.04
     env:
       PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-ubuntu
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
       with:
         submodules: 'recursive'
-    - name: cache-vulkansdk
-      id: cache-vulkansdk
-      uses: actions/cache@v1
-      with:
-        path: "1.2.162.0"
-        key: vulkansdk-linux-x86_64-1.2.162.0
-    - name: vulkansdk
-      if: steps.cache-vulkansdk.outputs.cache-hit != 'true'
-      run: |
-        wget https://sdk.lunarg.com/sdk/download/1.2.162.0/linux/vulkansdk-linux-x86_64-1.2.162.0.tar.gz?Human=true -O vulkansdk-linux-x86_64-1.2.162.0.tar.gz
-        tar -xf vulkansdk-linux-x86_64-1.2.162.0.tar.gz
-        rm -rf 1.2.162.0/source 1.2.162.0/samples
-        find 1.2.162.0 -type f | grep -v -E 'vulkan|glslang' | xargs rm
+
     - name: build
       run: |
-        export VULKAN_SDK=`pwd`/1.2.162.0/x86_64
-        mkdir build && cd build
-        cmake ../src
-        cmake --build . -j 2
+        sudo apt-get install -y cmake gcc g++
+        mkdir build
+        cd build && cmake ../src && cmake --build . -j 2
     - name: package
       run: |
-        mkdir -p ${{ env.PACKAGENAME }}
-        cp README.md LICENSE ${{ env.PACKAGENAME }}
-        cp build/${{ needs.setup.outputs.APPNAME }} ${{ env.PACKAGENAME }}
-        strip -g ${{ env.PACKAGENAME }}/${{ needs.setup.outputs.APPNAME }}
-        cp -r models/* ${{ env.PACKAGENAME }}
-        zip -9 -r ${{ env.PACKAGENAME }}.zip ${{ env.PACKAGENAME }}
+        mkdir -p ubuntu
+        cp README.md LICENSE ubuntu
+        cp build/${{ needs.setup.outputs.APPNAME }} ubuntu
+        strip -g ubuntu/${{ needs.setup.outputs.APPNAME }}
+        cp -r models/* ubuntu
+        zip -9 -r ubuntu.zip ubuntu
+    - name: log
+      run: |
+          ls
+          cd build && ls
+          
     - name: upload
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.PACKAGENAME }}
-        path: ${{ env.PACKAGENAME }}.zip
+        name: ubuntu
+        path: ubuntu.zip
+
+  ubuntu-arm:
+    needs: [setup]
+    runs-on: ubuntu-22.04-arm
+    env:
+      PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-ubuntu-arm
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+
+    - name: deps
+      run: |
+        sudo apt-get install -y cmake gcc g++
+    - name: build
+      run: |
+        mkdir build
+        cd build && cmake ../src && cmake --build . -j 2
+    - name: package
+      run: |
+        mkdir -p ubuntu-arm
+        cp README.md LICENSE ubuntu-arm
+        cp build/${{ needs.setup.outputs.APPNAME }} ubuntu-arm
+        strip -g ubuntu-arm/${{ needs.setup.outputs.APPNAME }}
+        cp -r models/* ubuntu-arm
+        zip -9 -r ubuntu-arm.zip ubuntu-arm
+    - name: log
+      run: |
+          ls
+          cd build && ls
+          
+    - name: upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: ubuntu-arm
+        path: ubuntu-arm.zip
+    
 
   openmp-macos:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
     - name: cache-openmp
       id: cache-openmp
-      uses: actions/cache@v1
+      uses: actions/cache@v4
       with:
         path: openmp-install
         key: openmp-macos-release-11.0.0
+    - name: Select Xcode version
+      run: sudo xcode-select --switch '/Library/Developer/CommandLineTools'
+    
     - name: checkout
       if: steps.cache-openmp.outputs.cache-hit != 'true'
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
     - name: openmp
       if: steps.cache-openmp.outputs.cache-hit != 'true'
       run: |
@@ -85,6 +122,9 @@ jobs:
         cd openmp-11.0.0.src
         sed -i'' -e '/.size __kmp_unnamed_critical_addr/d' runtime/src/z_Linux_asm.S
         sed -i'' -e 's/__kmp_unnamed_critical_addr/___kmp_unnamed_critical_addr/g' runtime/src/z_Linux_asm.S
+        # CMake 4 (current macOS runner images) rejects cmake_minimum_required < 3.5,
+        # including the try_compile test projects openmp 11 writes itself.
+        grep -rl 'cmake_minimum_required(VERSION 2' . | xargs perl -pi -e 's/cmake_minimum_required\(VERSION 2\.[0-9.]*/cmake_minimum_required(VERSION 3.5/'
     - name: build-x86_64
       if: steps.cache-openmp.outputs.cache-hit != 'true'
       run: |
@@ -112,22 +152,22 @@ jobs:
         mkdir -p $GITHUB_WORKSPACE/openmp-install/lib
         lipo -create openmp-11.0.0.src/build-x86_64/install/lib/libomp.a openmp-11.0.0.src/build-arm64/install/lib/libomp.a -o $GITHUB_WORKSPACE/openmp-install/lib/libomp.a
     - name: upload
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: openmp-macos
         path: openmp-install
 
   macos:
     needs: [setup, openmp-macos]
-    runs-on: macos-latest
+    runs-on: macos-15
     env:
       PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-macos
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
       with:
         submodules: 'recursive'
     - name: download-openmp-macos
-      uses: actions/download-artifact@v2
+      uses: actions/download-artifact@v4
       with:
         name: openmp-macos
         path: openmp-macos
@@ -135,16 +175,11 @@ jobs:
       run: |
         sudo cp openmp-macos/include/* $DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include
         sudo cp openmp-macos/lib/libomp.a $DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib
-    - name: cache-vulkansdk
-      id: cache-vulkansdk
-      uses: actions/cache@v1
-      with:
-        path: "vulkansdk-macos-1.2.162.0"
-        key: vulkansdk-macos-1.2.162.0
+    
     - name: vulkansdk
       if: steps.cache-vulkansdk.outputs.cache-hit != 'true'
       run: |
-        wget https://sdk.lunarg.com/sdk/download/1.2.162.0/mac/vulkansdk-macos-1.2.162.0.dmg?Human=true -O vulkansdk-macos-1.2.162.0.dmg
+        wget https://github.com/TNTwise/Rife-Vulkan-Models/releases/download/1/vulkansdk-macos-1.2.162.0.dmg -O vulkansdk-macos-1.2.162.0.dmg
         hdiutil attach vulkansdk-macos-1.2.162.0.dmg
         cp -r /Volumes/vulkansdk-macos-1.2.162.0 .
         rm -rf vulkansdk-macos-1.2.162.0/Applications
@@ -175,19 +210,30 @@ jobs:
             -DVulkan_LIBRARY=`pwd`/../vulkansdk-macos-1.2.162.0/MoltenVK/MoltenVK.xcframework/macos-arm64_x86_64/libMoltenVK.a \
             ../src
         cmake --build . -j 3
+  #  - name: build-arm64
+  #    run: |
+  #      export VULKAN_SDK=`pwd`/vulkansdk-macos-1.2.189.0/macOS
+  #      mkdir build-arm64 && cd build-arm64
+  #      cmake -DUSE_STATIC_MOLTENVK=ON -DCMAKE_OSX_ARCHITECTURES="arm64" \
+  #          -DCMAKE_CROSSCOMPILING=ON -DCMAKE_SYSTEM_PROCESSOR=arm64 \
+  #          -DOpenMP_C_FLAGS="-Xclang -fopenmp" -DOpenMP_CXX_FLAGS="-Xclang -fopenmp" \
+  #          -DOpenMP_C_LIB_NAMES="libomp" -DOpenMP_CXX_LIB_NAMES="libomp" \
+  #          -DOpenMP_libomp_LIBRARY="$DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libomp.a" \
+  #          ../src
+  #      cmake --build . -j 3
     - name: package
       run: |
-        mkdir -p ${{ env.PACKAGENAME }}
-        cp README.md LICENSE ${{ env.PACKAGENAME }}
-        lipo -create build-x86_64/${{ needs.setup.outputs.APPNAME }} build-arm64/${{ needs.setup.outputs.APPNAME }} -o ${{ env.PACKAGENAME }}/${{ needs.setup.outputs.APPNAME }}
-        strip ${{ env.PACKAGENAME }}/${{ needs.setup.outputs.APPNAME }}
-        cp -r models/* ${{ env.PACKAGENAME }}
-        zip -9 -r ${{ env.PACKAGENAME }}.zip ${{ env.PACKAGENAME }}
+        mkdir -p macos
+        cp README.md LICENSE macos/
+        lipo -create build-x86_64/${{ needs.setup.outputs.APPNAME }} build-arm64/${{ needs.setup.outputs.APPNAME }} -o macos/${{ needs.setup.outputs.APPNAME }}        
+        strip macos/${{ needs.setup.outputs.APPNAME }}
+        cp -r models/* macos
+        zip -9 -r macos.zip macos
     - name: upload
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.PACKAGENAME }}
-        path: ${{ env.PACKAGENAME }}.zip
+        name: macos
+        path: macos.zip
 
   windows:
     needs: [setup]
@@ -195,24 +241,11 @@ jobs:
     env:
       PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-windows
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
       with:
         submodules: 'recursive'
-    - name: cache-vulkansdk
-      id: cache-vulkansdk
-      uses: actions/cache@v1
-      with:
-        path: "VulkanSDK"
-        key: VulkanSDK-1.2.162.0-Installer
-    - name: vulkansdk
-      if: steps.cache-vulkansdk.outputs.cache-hit != 'true'
-      run: |
-        Invoke-WebRequest -Uri https://sdk.lunarg.com/sdk/download/1.2.162.0/windows/VulkanSDK-1.2.162.0-Installer.exe?Human=true -OutFile VulkanSDK-1.2.162.0-Installer.exe
-        7z x -aoa ./VulkanSDK-1.2.162.0-Installer.exe -oVulkanSDK
-        Remove-Item .\VulkanSDK\Demos, .\VulkanSDK\Samples, .\VulkanSDK\Third-Party, .\VulkanSDK\Tools, .\VulkanSDK\Tools32, .\VulkanSDK\Bin32, .\VulkanSDK\Lib32 -Recurse
     - name: build
       run: |
-        $env:VULKAN_SDK="$(pwd)/VulkanSDK"
         mkdir build; cd build
         cmake -A x64 ../src
         cmake --build . --config Release -j 2
@@ -224,42 +257,86 @@ jobs:
         Copy-Item -Verbose -Path "build\Release\${{ needs.setup.outputs.APPNAME }}.exe" -Destination "${{ env.PACKAGENAME }}"
         Copy-Item -Verbose -Path "C:\windows\system32\vcomp140.dll" -Destination "${{ env.PACKAGENAME }}"
         Copy-Item -Verbose -Recurse -Path "models\*" -Destination "${{ env.PACKAGENAME }}"
-        7z a -r ${{ env.PACKAGENAME }}.zip ${{ env.PACKAGENAME }}
-    - name: upload
-      uses: actions/upload-artifact@v2
-      with:
-        name: ${{ env.PACKAGENAME }}
-        path: ${{ env.PACKAGENAME }}.zip
+        7z a -r ${{ github.job }}.zip ${{ env.PACKAGENAME }}
 
+    - name: upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows
+        path: windows.zip
+
+  windows-arm:
+    needs: [setup]
+    runs-on: windows-latest
+    env:
+      PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-windows
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+    - name: build
+      run: |
+        mkdir build; cd build
+        cmake -A arm64 ../src
+        cmake --build . --config Release -j 2
+    - name: package
+      run: |
+        mkdir ${{ env.PACKAGENAME }}
+        Copy-Item -Verbose -Path "README.md" -Destination "${{ env.PACKAGENAME }}"
+        Copy-Item -Verbose -Path "LICENSE" -Destination "${{ env.PACKAGENAME }}"
+        Copy-Item -Verbose -Path "build\Release\${{ needs.setup.outputs.APPNAME }}.exe" -Destination "${{ env.PACKAGENAME }}"
+        Copy-Item -Verbose -Path "C:\windows\system32\vcomp140.dll" -Destination "${{ env.PACKAGENAME }}"
+        Copy-Item -Verbose -Recurse -Path "models\*" -Destination "${{ env.PACKAGENAME }}"
+        7z a -r ${{ github.job }}.zip ${{ env.PACKAGENAME }}
+   
+    - name: upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-arm
+        path: windows-arm.zip
+  
   release:
-    needs: [setup, ubuntu, macos, windows]
+    needs: [setup, ubuntu, windows,macos]
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
     - name: download
-      uses: actions/download-artifact@v2
+      uses: actions/download-artifact@v4
       with:
         path: artifacts
-
+    - name: Generate version and tag
+      id: version_tag
+      run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "Tag=$tag"
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
     - name: create-release
       id: create_release
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ needs.setup.outputs.VERSION }}
-        release_name: Release ${{ needs.setup.outputs.VERSION }}
+        tag_name: ${{ steps.version_tag.outputs.tag }}
+        release_name: Release ${{ steps.version_tag.outputs.tag }}
         draft: false
         prerelease: false
-
+    
     - name: upload-ubuntu
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-ubuntu
+
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: artifacts/${{ env.PACKAGENAME }}/${{ env.PACKAGENAME }}.zip
-        asset_name: ${{ env.PACKAGENAME }}.zip
+        asset_path: artifacts/ubuntu/ubuntu.zip
+        asset_name: ubuntu.zip
         asset_content_type: application/zip
 
     - name: upload-macos
@@ -269,10 +346,17 @@ jobs:
         PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-macos
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: artifacts/${{ env.PACKAGENAME }}/${{ env.PACKAGENAME }}.zip
-        asset_name: ${{ env.PACKAGENAME }}.zip
+        asset_path: artifacts/macos/macos.zip
+        asset_name: macos.zip
         asset_content_type: application/zip
-
+    - name: log
+      run: |
+        ls
+        cd artifacts
+        ls
+        cd windows
+        ls
+        
     - name: upload-windows
       uses: actions/upload-release-asset@v1
       env:
@@ -280,6 +364,6 @@ jobs:
         PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-windows
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: artifacts/${{ env.PACKAGENAME }}/${{ env.PACKAGENAME }}.zip
-        asset_name: ${{ env.PACKAGENAME }}.zip
+        asset_path: artifacts/windows/windows.zip
+        asset_name: windows.zip
         asset_content_type: application/zip
