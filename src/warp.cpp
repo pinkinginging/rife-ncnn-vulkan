@@ -59,7 +59,9 @@ int Warp::create_pipeline(const Option& opt)
     }
 
     // pack8
-    if (opt.use_shader_pack8)
+    // ncnn Option no longer exposes use_shader_pack8; pack8 paths are gated by
+    // fp16 packed support.
+    if (opt.use_fp16_packed)
     {
         static std::vector<uint32_t> spirv;
         static ncnn::Mutex lock;
