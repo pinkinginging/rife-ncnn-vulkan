@@ -122,6 +122,9 @@ jobs:
         cd openmp-11.0.0.src
         sed -i'' -e '/.size __kmp_unnamed_critical_addr/d' runtime/src/z_Linux_asm.S
         sed -i'' -e 's/__kmp_unnamed_critical_addr/___kmp_unnamed_critical_addr/g' runtime/src/z_Linux_asm.S
+        # CMake 4 (current macOS runner images) rejects cmake_minimum_required < 3.5,
+        # including the try_compile test projects openmp 11 writes itself.
+        grep -rl 'cmake_minimum_required(VERSION 2' . | xargs perl -pi -e 's/cmake_minimum_required\(VERSION 2\.[0-9.]*/cmake_minimum_required(VERSION 3.5/'
     - name: build-x86_64
       if: steps.cache-openmp.outputs.cache-hit != 'true'
       run: |
