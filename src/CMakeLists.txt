@@ -16,7 +16,12 @@ option(USE_STATIC_MOLTENVK "link moltenvk static library" OFF)
 
 find_package(Threads)
 find_package(OpenMP)
-find_package(Vulkan REQUIRED)
+# ncnn's SimpleVK bundles the Vulkan headers and loads the Vulkan loader at
+# runtime, so no Vulkan SDK is needed to build. Only the macOS static
+# MoltenVK build still links a Vulkan library explicitly.
+if(USE_STATIC_MOLTENVK)
+    find_package(Vulkan REQUIRED)
+endif()
 
 macro(rife_add_shader SHADER_SRC)
     get_filename_component(SHADER_SRC_NAME_WE ${SHADER_SRC} NAME_WE)
@@ -106,13 +111,7 @@ if(NOT USE_SYSTEM_NCNN)
     option(NCNN_DISABLE_RTTI "" ON)
     option(NCNN_DISABLE_EXCEPTION "" ON)
     option(NCNN_INT8 "" OFF)
-    if(APPLE)
-      # Execute the build command if the platform is macOS
-      option(NCNN_SIMPLEVK "" ON)
-    endif()
-    if(NOT APPLE)
-      option(NCNN_SIMPLEVK "" OFF)
-    endif()
+    option(NCNN_SIMPLEVK "" ON)
     
     option(WITH_LAYER_absval "" OFF)
     option(WITH_LAYER_argmax "" OFF)
@@ -283,14 +282,8 @@ add_dependencies(rife-ncnn-vulkan generate-spirv)
 # without a /lib/libvulkan.so symlink. When FindVulkan caches a non-existent
 # path, make will fail with "No rule to make target '/lib/libvulkan.so'".
 # Find the loader library ourselves (fresh variable) to ensure it exists.
-find_library(RIFE_VULKAN_LOADER_LIBRARY NAMES vulkan)
-if(RIFE_VULKAN_LOADER_LIBRARY)
-    set(RIFE_LINK_LIBRARIES ncnn webp ${RIFE_VULKAN_LOADER_LIBRARY})
-elseif(TARGET Vulkan::Vulkan)
-    set(RIFE_LINK_LIBRARIES ncnn webp Vulkan::Vulkan)
-else()
-    set(RIFE_LINK_LIBRARIES ncnn webp vulkan)
-endif()
+# With NCNN_SIMPLEVK the loader is opened at runtime; nothing to link.
+set(RIFE_LINK_LIBRARIES ncnn webp)
 
 if(USE_STATIC_MOLTENVK)
     find_library(CoreFoundation NAMES CoreFoundation)
@@ -303,6 +296,7 @@ if(USE_STATIC_MOLTENVK)
     find_library(IOSurface NAMES IOSurface)
 
     list(APPEND RIFE_LINK_LIBRARIES
+        ${Vulkan_LIBRARY}
         ${Metal}
         ${QuartzCore}
         ${CoreGraphics}
